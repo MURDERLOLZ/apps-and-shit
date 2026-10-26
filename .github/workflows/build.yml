@@ -9,10 +9,36 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Create Swift Project Structure
+      - name: Set up Swift Package
         run: |
-          mkdir -p Imfaocoop.xcodeproj
-          cat << 'EOF' > ContentView.swift
+          swift package init --type executable --name Imfaocoop
+          
+          # Replace Package.swift for SwiftUI support
+          cat << 'EOF' > Package.swift
+          // swift-tools-version: 5.9
+          let package = Package(
+              name: "Imfaocoop",
+              platforms: [.iOS(.16)],
+              products: [.executable(name: "Imfaocoop", targets: ["Imfaocoop"])],
+              targets: [.executableTarget(name: "Imfaocoop", path: "Sources")]
+          )
+          EOF
+
+          mkdir -p Sources
+          cat << 'EOF' > Sources/main.swift
+          import SwiftUI
+
+          @main
+          struct ImfaocoopApp: App {
+              var body: some Scene {
+                  WindowGroup {
+                      ContentView()
+                  }
+              }
+          }
+          EOF
+
+          cat << 'EOF' > Sources/ContentView.swift
           import SwiftUI
 
           struct ContentView: View {
@@ -31,28 +57,15 @@ jobs:
           }
           EOF
 
-          cat << 'EOF' > main.swift
-          import SwiftUI
-
-          @main
-          struct ImfaocoopApp: App {
-              var body: some Scene {
-                  WindowGroup {
-                      ContentView()
-                  }
-              }
-          }
-          EOF
-
-      - name: Compile Binary
+      - name: Build for iOS Device
         run: |
-          swiftc -parse-as-library main.swift ContentView.swift -target arm64-apple-ios16.0-simulator -sdk $(xcrun --sdk iphonesimulator --show-sdk-path) -o Imfaocoop
+          swift build -c release --target Imfaocoop --sdk $(xcrun --sdk iphoneos --show-sdk-path) -Xswiftc -target -Xswiftc arm64-apple-ios16.0
 
-      - name: Package App Bundle
+      - name: Package App Bundle & IPA
         run: |
           mkdir -p Payload/Imfaocoop.app
-          mv Imfaocoop Payload/Imfaocoop.app/
-
+          cp .build/release/Imfaocoop Payload/Imfaocoop.app/
+          
           cat << 'EOF' > Payload/Imfaocoop.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
