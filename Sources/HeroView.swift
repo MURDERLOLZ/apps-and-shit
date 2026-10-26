@@ -148,17 +148,27 @@ private struct FeatureCard: View {
 }
 
 private struct AppGlyph: View {
+    // Bundled PNG (the logo already carries its own rounded-square frame).
+    private var logo: UIImage? {
+        Bundle.main.url(forResource: "AppGlyph", withExtension: "png")
+            .flatMap { try? Data(contentsOf: $0) }
+            .flatMap(UIImage.init(data:))
+    }
+
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(LinearGradient(colors: [Palette.violet, Palette.ember],
-                                     startPoint: .topLeading, endPoint: .bottomTrailing))
-            Image(systemName: "bubble.left.and.text.bubble.right.fill")
-                .font(.system(size: 42, weight: .bold))
-                .foregroundStyle(.white)
+        Group {
+            if let logo {
+                Image(uiImage: logo).resizable().scaledToFit()
+            } else {
+                // Fallback if the resource didn't get copied into the bundle.
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(LinearGradient(colors: [Palette.violet, Palette.ember],
+                                         startPoint: .topLeading, endPoint: .bottomTrailing))
+            }
         }
-        .frame(width: 96, height: 96)
-        .shadow(color: Palette.violet.opacity(0.5), radius: 24, y: 10)
+        .frame(width: 104, height: 104)
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .shadow(color: Palette.violet.opacity(0.45), radius: 26, y: 10)
     }
 }
 

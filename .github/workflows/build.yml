@@ -22,6 +22,7 @@ jobs:
           mkdir -p Payload/SwiftCord.app
           mv SwiftCord Payload/SwiftCord.app/
           cp Info.plist Payload/SwiftCord.app/
+          cp Resources/AppGlyph.png Payload/SwiftCord.app/
           zip -r SwiftCord.ipa Payload
 
       - name: Upload Artifact
