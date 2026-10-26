@@ -1,6 +1,6 @@
-name: Build iOS App
+name: Build SwiftCord
 
-on: [push]
+on: [push, workflow_dispatch]
 
 jobs:
   build:
@@ -9,80 +9,23 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Create Project Files
-        run: |
-          mkdir -p Imfaocoop.xcodeproj
-          
-          cat << 'EOF' > ContentView.swift
-          import SwiftUI
-
-          struct ContentView: View {
-              var body: some View {
-                  ZStack {
-                      Color.black
-                          .ignoresSafeArea()
-
-                      Text("coop thought he was getting sum 😂")
-                          .font(.system(size: 30, weight: .bold))
-                          .foregroundColor(.white)
-                          .multilineTextAlignment(.center)
-                          .padding()
-                  }
-              }
-          }
-          EOF
-
-          cat << 'EOF' > MainApp.swift
-          import SwiftUI
-
-          @main
-          struct ImfaocoopApp: App {
-              var body: some Scene {
-                  WindowGroup {
-                      ContentView()
-                  }
-              }
-          }
-          EOF
-
-          cat << 'EOF' > Info.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleIdentifier</key>
-              <string>com.r9k.lmfaocoop</string>
-              <key>CFBundleName</key>
-              <string>Imfaocoop</string>
-              <key>CFBundleExecutable</key>
-              <string>Imfaocoop</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>CFBundleShortVersionString</key>
-              <string>1.0</string>
-              <key>MinimumOSVersion</key>
-              <string>16.0</string>
-          </dict>
-          </plist>
-          EOF
-
       - name: Compile with swiftc
         run: |
-          swiftc -parse-as-library MainApp.swift ContentView.swift \
+          swiftc -parse-as-library Sources/*.swift \
             -target arm64-apple-ios16.0 \
             -sdk $(xcrun --sdk iphoneos --show-sdk-path) \
-            -framework SwiftUI -framework UIKit -framework Foundation \
-            -o Imfaocoop
+            -framework SwiftUI -framework WebKit -framework UIKit -framework Foundation \
+            -o SwiftCord
 
       - name: Package IPA
         run: |
-          mkdir -p Payload/Imfaocoop.app
-          mv Imfaocoop Payload/Imfaocoop.app/
-          cp Info.plist Payload/Imfaocoop.app/
-          zip -r Imfaocoop.ipa Payload
+          mkdir -p Payload/SwiftCord.app
+          mv SwiftCord Payload/SwiftCord.app/
+          cp Info.plist Payload/SwiftCord.app/
+          zip -r SwiftCord.ipa Payload
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Imfaocoop-IPA
-          path: Imfaocoop.ipa
+          name: SwiftCord-IPA
+          path: SwiftCord.ipa
