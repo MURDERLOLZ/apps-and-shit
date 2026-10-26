@@ -79,6 +79,10 @@ final class Session: ObservableObject {
     private static func fetchMe(token: String) async throws -> DiscordUser {
         var req = URLRequest(url: URL(string: "https://discord.com/api/v10/users/@me")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
+        // A browser-ish UA keeps Discord's edge from throwing a 403 challenge at us.
+        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+                     forHTTPHeaderField: "User-Agent")
+        req.setValue("en-US", forHTTPHeaderField: "X-Discord-Locale")
         req.timeoutInterval = 15
 
         let data: Data
@@ -91,7 +95,8 @@ final class Session: ObservableObject {
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             guard let user = try? decoder.decode(DiscordUser.self, from: data) else { throw AuthError.network }
             return user
-        case 401, 403: throw AuthError.invalidToken
+        case 401: throw AuthError.invalidToken       // genuinely rejected
+        case 403: throw AuthError.network            // edge challenge, not a dead token — keep it
         case 429: throw AuthError.rateLimited
         default: throw AuthError.network
         }

@@ -62,23 +62,53 @@ private struct DiscordWebLogin: UIViewRepresentable {
         // attaches to its own API calls after a successful login.
         let js = """
         (function () {
-          function post(t) { try { window.webkit.messageHandlers.token.postMessage(t); } catch (e) {} }
-          const origFetch = window.fetch;
-          window.fetch = function (resource, init) {
+          function post(t) { try { if (t) window.webkit.messageHandlers.token.postMessage(String(t)); } catch (e) {} }
+          // Only accept values shaped like a real user token (dotted, no Bearer).
+          function ok(v) { return v && v.indexOf(' ') < 0 && v.split('.').length === 3; }
+
+          // 1) Live sniff: Discord puts the token on the Authorization header of its own API calls.
+          try {
+            const origFetch = window.fetch;
+            window.fetch = function (resource, init) {
+              try {
+                const h = (init && init.headers) || (resource && resource.headers);
+                if (h) {
+                  const auth = (h.get ? h.get('Authorization') : h['Authorization']);
+                  if (ok(auth)) post(auth);
+                }
+              } catch (e) {}
+              return origFetch.apply(this, arguments);
+            };
+            const origSet = XMLHttpRequest.prototype.setRequestHeader;
+            XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
+              try { if (String(k).toLowerCase() === 'authorization' && ok(v)) post(v); } catch (e) {}
+              return origSet.apply(this, arguments);
+            };
+          } catch (e) {}
+
+          // 2) Deterministic grab from Discord's own module store, in case the sniff misses.
+          let tries = 0;
+          const timer = setInterval(function () {
+            tries++;
             try {
-              const h = (init && init.headers) || (resource && resource.headers);
-              if (h) {
-                const auth = (h.get ? h.get('Authorization') : h['Authorization']);
-                if (auth) post(auth);
+              const chunk = window.webpackChunkdiscord_app;
+              if (chunk) {
+                let token;
+                chunk.push([[Math.random()], {}, function (req) {
+                  for (const id in req.c) {
+                    try {
+                      const mod = req.c[id].exports;
+                      const t = (mod && mod.default && mod.default.getToken && mod.default.getToken())
+                             || (mod && mod.getToken && mod.getToken());
+                      if (t) { token = t; break; }
+                    } catch (e) {}
+                  }
+                }]);
+                if (ok(token)) { clearInterval(timer); post(token); }
               }
             } catch (e) {}
-            return origFetch.apply(this, arguments);
-          };
-          const origSet = XMLHttpRequest.prototype.setRequestHeader;
-          XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
-            try { if (String(k).toLowerCase() === 'authorization') post(v); } catch (e) {}
-            return origSet.apply(this, arguments);
-          };
+            if (tries > 40) clearInterval(timer); // give up after ~20s
+          }, 500);
         })();
         """
         contentController.addUserScript(
