@@ -1,61 +1,83 @@
 import Foundation
 
-struct Snowflake: Hashable, Codable {
-    let id: String
-    init(_ id: String) { self.id = id }
-    init(from d: Decoder) throws { id = try d.singleValueContainer().decode(String.self) }
-    func encode(to e: Encoder) throws { var c = e.singleValueContainer(); try c.encode(id) }
-}
+/// A shared decoder: snake_case JSON -> camelCase properties, lenient on extras.
+let discordDecoder: JSONDecoder = {
+    let d = JSONDecoder()
+    d.keyDecodingStrategy = .convertFromSnakeCase
+    return d
+}()
 
-struct Author: Codable, Identifiable, Hashable {
+struct GatewayUser: Decodable, Identifiable, Hashable {
     let id: String
     let username: String
     let globalName: String?
     let avatar: String?
 
-    var display: String { globalName ?? username }
+    var displayName: String { globalName?.isEmpty == false ? globalName! : username }
+
     func avatarURL(size: Int = 64) -> URL? {
-        guard let avatar else { return nil }
-        return URL(string: "https://cdn.discordapp.com/avatars/\(id)/\(avatar).png?size=\(size)")
+        if let avatar {
+            return URL(string: "https://cdn.discordapp.com/avatars/\(id)/\(avatar).png?size=\(size)")
+        }
+        // Default avatar: new accounts bucket by (id >> 22) % 6.
+        let idx = (Int(id) ?? 0) % 5
+        return URL(string: "https://cdn.discordapp.com/embed/avatars/\(idx).png")
     }
+
+    var initial: String { String(displayName.first ?? "?").uppercased() }
 }
 
-/// A DM, group DM, or guild text channel. type: 0 guild text, 1 DM, 3 group DM.
-struct Channel: Codable, Identifiable, Hashable {
+/// DM (type 1) or group DM (type 3).
+struct DMChannel: Decodable, Identifiable, Hashable {
     let id: String
     let type: Int
     let name: String?
-    let recipients: [Author]?
+    let recipients: [GatewayUser]?
+    let recipientIds: [String]?
     let lastMessageId: String?
 
-    var isDM: Bool { type == 1 || type == 3 }
-
-    func title(myID: String?) -> String {
-        if let name, !name.isEmpty { return name }
-        let others = (recipients ?? []).filter { $0.id != myID }
-        if others.isEmpty { return "Direct Message" }
-        return others.map(\.display).joined(separator: ", ")
-    }
-
-    func iconURL(myID: String?) -> URL? {
-        (recipients ?? []).first { $0.id != myID }?.avatarURL()
-    }
+    static func == (l: DMChannel, r: DMChannel) -> Bool { l.id == r.id }
+    func hash(into h: inout Hasher) { h.combine(id) }
 }
 
-struct Message: Codable, Identifiable, Hashable {
+struct Relationship: Decodable, Identifiable {
+    let id: String      // the other user's id
+    let type: Int       // 1 friend, 2 blocked, 3 incoming, 4 outgoing
+    let user: GatewayUser?
+}
+
+struct Message: Decodable, Identifiable, Hashable {
     let id: String
     let channelId: String
     let content: String
-    let author: Author
+    let author: GatewayUser
     let timestamp: String
-    let editedTimestamp: String?
+    let attachments: [Attachment]?
+
+    struct Attachment: Decodable, Hashable {
+        let url: String
+        let filename: String
+        let contentType: String?
+    }
+
+    static func == (l: Message, r: Message) -> Bool { l.id == r.id }
+    func hash(into h: inout Hasher) { h.combine(id) }
 
     var time: String {
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = iso.date(from: timestamp) ?? ISO8601DateFormatter().date(from: timestamp)
-        guard let date else { return "" }
-        let f = DateFormatter(); f.timeStyle = .short; f.dateStyle = .none
+        let date = iso.date(from: timestamp) ?? ISO8601DateFormatter().date(from: timestamp) ?? Date()
+        let f = DateFormatter(); f.dateFormat = "h:mm a"
         return f.string(from: date)
     }
+}
+
+/// The subset of READY we actually use.
+struct ReadyPayload: Decodable {
+    let user: GatewayUser
+    let privateChannels: [DMChannel]
+    let relationships: [Relationship]
+    let users: [GatewayUser]?
+    let sessionId: String
+    let resumeGatewayUrl: String?
 }

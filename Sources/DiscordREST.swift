@@ -1,71 +1,78 @@
 import Foundation
 
-/// Thin URLSession wrapper. Serializes requests, honors X-RateLimit headers and
-/// 429 retry_after, and attaches the token + a browser-ish UA. No polling anywhere.
+/// Thin URLSession wrapper. Serializes requests, honors Discord's rate-limit
+/// headers, and waits out 429s instead of hammering. Human-driven calls only.
 actor DiscordREST {
-    static let shared = DiscordREST()
-
-    private let base = "https://discord.com/api/v10"
+    private let token: String
     private let session = URLSession(configuration: .ephemeral)
-    private var token: String?
-    private var nextAllowed: Date = .distantPast   // global backoff floor
+    private let base = "https://discord.com/api/v10"
+    private var nextAllowed = Date.distantPast  // global soft gate after a 429
 
-    private static let ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+    init(token: String) { self.token = token }
 
-    func setToken(_ t: String?) { token = t }
+    enum RESTError: Error { case http(Int), decode, network }
 
-    struct APIError: Error { let status: Int }
+    private func makeRequest(_ method: String, _ path: String, body: [String: Any]? = nil) -> URLRequest {
+        var req = URLRequest(url: URL(string: base + path)!)
+        req.httpMethod = method
+        req.setValue(token, forHTTPHeaderField: "Authorization")
+        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+                     forHTTPHeaderField: "User-Agent")
+        if let body {
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        }
+        req.timeoutInterval = 20
+        return req
+    }
 
-    func get<T: Decodable>(_ path: String, as: T.Type) async throws -> T {
-        try await decode(request("GET", path, body: nil))
+    private func send(_ req: URLRequest, retriesLeft: Int = 2) async throws -> Data {
+        let wait = nextAllowed.timeIntervalSinceNow
+        if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
+
+        let data: Data, resp: URLResponse
+        do { (data, resp) = try await session.data(for: req) } catch { throw RESTError.network }
+        guard let http = resp as? HTTPURLResponse else { throw RESTError.network }
+
+        switch http.statusCode {
+        case 200...299:
+            return data
+        case 429:
+            var retryAfter = 1.0
+            if let any = try? JSONSerialization.jsonObject(with: data),
+               let obj = any as? [String: Any],
+               let ra = obj["retry_after"] as? Double { retryAfter = ra }
+            nextAllowed = Date().addingTimeInterval(retryAfter + 0.1)
+            guard retriesLeft > 0 else { throw RESTError.http(429) }
+            return try await send(req, retriesLeft: retriesLeft - 1)
+        default:
+            throw RESTError.http(http.statusCode)
+        }
+    }
+
+    func messages(channelId: String, before: String? = nil, limit: Int = 50) async throws -> [Message] {
+        var path = "/channels/\(channelId)/messages?limit=\(limit)"
+        if let before { path += "&before=\(before)" }
+        let data = try await send(makeRequest("GET", path))
+        guard let msgs = try? discordDecoder.decode([Message].self, from: data) else { throw RESTError.decode }
+        return msgs.reversed()  // API returns newest-first; we want oldest-first
     }
 
     @discardableResult
-    func post<T: Decodable>(_ path: String, json: [String: Any], as: T.Type) async throws -> T {
-        let data = try JSONSerialization.data(withJSONObject: json)
-        return try await decode(request("POST", path, body: data))
+    func sendMessage(channelId: String, content: String, nonce: String) async throws -> Message {
+        let body: [String: Any] = ["content": content, "nonce": nonce, "tts": false]
+        let data = try await send(makeRequest("POST", "/channels/\(channelId)/messages", body: body))
+        guard let msg = try? discordDecoder.decode(Message.self, from: data) else { throw RESTError.decode }
+        return msg
     }
 
-    private func decode<T: Decodable>(_ data: Data) throws -> T {
-        let d = JSONDecoder(); d.keyDecodingStrategy = .convertFromSnakeCase
-        return try d.decode(T.self, from: data)
+    func openDM(recipientId: String) async throws -> DMChannel {
+        let data = try await send(makeRequest("POST", "/users/@me/channels", body: ["recipients": [recipientId]]))
+        guard let ch = try? discordDecoder.decode(DMChannel.self, from: data) else { throw RESTError.decode }
+        return ch
     }
 
-    private func request(_ method: String, _ path: String, body: Data?) async throws -> Data {
-        guard let token else { throw APIError(status: 401) }
-
-        // Respect any backoff we were told to wait out.
-        let wait = nextAllowed.timeIntervalSinceNow
-        if wait > 0 { try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
-
-        var req = URLRequest(url: URL(string: base + path)!)
-        req.httpMethod = method
-        req.httpBody = body
-        req.setValue(token, forHTTPHeaderField: "Authorization")
-        req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
-        req.setValue("en-US", forHTTPHeaderField: "X-Discord-Locale")
-        if body != nil { req.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-
-        let (data, resp) = try await session.data(for: req)
-        let http = resp as? HTTPURLResponse
-        let status = http?.statusCode ?? 0
-
-        // If we're near the bucket limit, hold off the next call until reset.
-        if let remaining = http?.value(forHTTPHeaderField: "X-RateLimit-Remaining"),
-           remaining == "0",
-           let resetAfter = http?.value(forHTTPHeaderField: "X-RateLimit-Reset-After"),
-           let secs = Double(resetAfter) {
-            nextAllowed = Date().addingTimeInterval(secs)
-        }
-
-        if status == 429 {
-            let retry = (http?.value(forHTTPHeaderField: "Retry-After")).flatMap(Double.init) ?? 1
-            nextAllowed = Date().addingTimeInterval(retry)
-            try await Task.sleep(nanoseconds: UInt64(retry * 1_000_000_000))
-            return try await request(method, path, body: body) // one retry after waiting
-        }
-
-        guard (200..<300).contains(status) else { throw APIError(status: status) }
-        return data
+    func ackMessage(channelId: String, messageId: String) async {
+        _ = try? await send(makeRequest("POST", "/channels/\(channelId)/messages/\(messageId)/ack", body: ["token": NSNull()]))
     }
 }

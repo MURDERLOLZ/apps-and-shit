@@ -1,80 +1,90 @@
 import Foundation
-import SwiftUI
+import Combine
 
-/// In-memory cache fed by the gateway. Holds DMs and per-channel messages.
-/// Lazy: message history is only fetched when a channel is opened.
 @MainActor
 final class Store: ObservableObject {
-    @Published var me: Author?
-    @Published var dms: [Channel] = []
-    @Published var messages: [String: [Message]] = [:]   // channelId -> messages (oldest first)
+    @Published var me: GatewayUser?
+    @Published var dms: [DMChannel] = []
+    @Published var friends: [Relationship] = []
+    @Published var messages: [String: [Message]] = [:]   // channelId -> oldest-first
     @Published var connected = false
+    @Published var ready = false
 
-    private let gateway = DiscordGateway()
-    private var started = false
+    let rest: DiscordREST
+    private let gateway: Gateway
+    private var users: [String: GatewayUser] = [:]
 
-    func start(token: String) {
-        guard !started else { return }
-        started = true
-        Task { await DiscordREST.shared.setToken(token) }
-
-        gateway.onEvent = { [weak self] event in
-            Task { @MainActor in self?.apply(event) }
-        }
-        gateway.connect(token: token)
+    init(token: String) {
+        rest = DiscordREST(token: token)
+        gateway = Gateway(token: token)
+        gateway.onEvent = { [weak self] in self?.apply($0) }
     }
 
-    func stop() {
-        gateway.disconnect()
-        started = false
-        connected = false
-        me = nil; dms = []; messages = [:]
-    }
+    func start() { gateway.connect() }
+    func stop() { gateway.disconnect() }
 
-    private func apply(_ event: DiscordGateway.Event) {
+    private func apply(_ event: GatewayEvent) {
         switch event {
-        case .ready(let me, let channels):
-            self.me = me
-            self.dms = channels
-                .filter(\.isDM)
-                .sorted { ($0.lastMessageId ?? "") > ($1.lastMessageId ?? "") }
-            connected = true
-        case .message(let msg):
-            messages[msg.channelId, default: []].append(msg)
-            // Bump the DM to the top on new activity.
-            if let i = dms.firstIndex(where: { $0.id == msg.channelId }), i != 0 {
-                dms.move(fromOffsets: IndexSet(integer: i), toOffset: 0)
-            }
-        case .closed:
-            connected = false
+        case .connected(let on):
+            connected = on
+        case .ready(let r):
+            me = r.user
+            for u in r.users ?? [] { users[u.id] = u }
+            for ch in r.privateChannels { for u in ch.recipients ?? [] { users[u.id] = u } }
+            for rel in r.relationships { if let u = rel.user { users[u.id] = u } }
+            dms = r.privateChannels.sorted { ($0.lastMessageId ?? "") > ($1.lastMessageId ?? "") }
+            friends = r.relationships.filter { $0.type == 1 }
+            ready = true
+        case .messageCreate(let msg):
+            users[msg.author.id] = msg.author
+            var list = messages[msg.channelId] ?? []
+            if !list.contains(msg) { list.append(msg); messages[msg.channelId] = list }
+            bump(channel: msg.channelId)
+        case .relationshipAdd(let rel):
+            if let u = rel.user { users[u.id] = u }
+            friends.removeAll { $0.id == rel.id }
+            if rel.type == 1 { friends.append(rel) }
+        case .relationshipRemove(let id):
+            friends.removeAll { $0.id == id }
         }
     }
 
-    // MARK: - REST-backed actions
+    private func bump(channel id: String) {
+        guard let idx = dms.firstIndex(where: { $0.id == id }), idx != 0 else { return }
+        let ch = dms.remove(at: idx)
+        dms.insert(ch, at: 0)
+    }
 
-    func loadHistory(_ channelId: String) async {
-        guard messages[channelId] == nil else { return } // already have it; gateway keeps it fresh
-        do {
-            let fetched = try await DiscordREST.shared.get(
-                "/channels/\(channelId)/messages?limit=50", as: [Message].self)
-            messages[channelId] = fetched.reversed() // API returns newest first
-        } catch {
-            messages[channelId] = []
+    // MARK: display helpers
+
+    func title(for ch: DMChannel) -> String {
+        if let name = ch.name, !name.isEmpty { return name }
+        let people = recipients(of: ch)
+        if people.isEmpty { return "Direct Message" }
+        return people.map(\.displayName).joined(separator: ", ")
+    }
+
+    func recipients(of ch: DMChannel) -> [GatewayUser] {
+        if let r = ch.recipients, !r.isEmpty { return r }
+        return (ch.recipientIds ?? []).compactMap { users[$0] }
+    }
+
+    func avatarUser(for ch: DMChannel) -> GatewayUser? { recipients(of: ch).first }
+
+    // MARK: actions
+
+    func loadMessages(_ channelId: String) async {
+        if let existing = messages[channelId], !existing.isEmpty { return }
+        if let fetched = try? await rest.messages(channelId: channelId) {
+            messages[channelId] = fetched
         }
     }
 
-    func send(_ content: String, to channelId: String) async {
-        let text = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+    func send(_ channelId: String, _ content: String) async {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
         let nonce = String(Int(Date().timeIntervalSince1970 * 1000))
-        do {
-            // The echoed MESSAGE_CREATE from the gateway adds it to the list.
-            try await DiscordREST.shared.post(
-                "/channels/\(channelId)/messages",
-                json: ["content": text, "nonce": nonce],
-                as: Message.self)
-        } catch {
-            // swallow; a failed send just doesn't appear
-        }
+        // The gateway MESSAGE_CREATE echo appends it; dedup handles overlap.
+        _ = try? await rest.sendMessage(channelId: channelId, content: trimmed, nonce: nonce)
     }
 }

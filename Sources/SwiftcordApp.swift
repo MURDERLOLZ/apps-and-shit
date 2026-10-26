@@ -35,10 +35,45 @@ struct RootView: View {
                 }
                 .foregroundStyle(.white)
             case .loggedIn:
-                DMListView()
+                if let token = session.token {
+                    DMHome(token: token).environmentObject(session)
+                }
             }
         }
         .task { await session.restore() }
+    }
+}
+
+/// Owns the live Store for the session and hosts the DM experience.
+struct DMHome: View {
+    @StateObject private var store: Store
+    @EnvironmentObject var session: Session
+
+    init(token: String) {
+        _store = StateObject(wrappedValue: Store(token: token))
+    }
+
+    var body: some View {
+        NavigationStack {
+            DMListView(store: store)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Menu {
+                            if let me = store.me {
+                                Text(me.displayName)
+                                Text("@\(me.username)")
+                            }
+                            Button("Log out", role: .destructive) {
+                                store.stop(); session.logout()
+                            }
+                        } label: {
+                            Avatar(user: store.me, size: 30)
+                        }
+                    }
+                }
+        }
+        .tint(Palette.lilac)
+        .task { store.start() }
     }
 }
 
