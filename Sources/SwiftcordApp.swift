@@ -34,37 +34,11 @@ struct RootView: View {
                         .tint(Palette.violet)
                 }
                 .foregroundStyle(.white)
-            case .loggedIn(let user):
-                HomeView(user: user)
+            case .loggedIn:
+                DMListView()
             }
         }
         .task { await session.restore() }
-    }
-}
-
-struct HomeView: View {
-    let user: DiscordUser
-    @EnvironmentObject var session: Session
-
-    var body: some View {
-        VStack(spacing: 14) {
-            AsyncImage(url: user.avatarURL) { img in
-                img.resizable().scaledToFill()
-            } placeholder: {
-                Circle().fill(.white.opacity(0.1))
-            }
-            .frame(width: 88, height: 88)
-            .clipShape(Circle())
-
-            Text(user.displayName).font(.title2.bold())
-            Text("@\(user.username)").foregroundStyle(.white.opacity(0.6))
-            Text("DMs and servers land next.").font(.footnote).foregroundStyle(.white.opacity(0.4))
-
-            Button("Log out", role: .destructive) { session.logout() }
-                .buttonStyle(.bordered)
-                .padding(.top, 8)
-        }
-        .foregroundStyle(.white)
     }
 }
 
