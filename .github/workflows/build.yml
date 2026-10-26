@@ -1,0 +1,83 @@
+name: Build iOS App
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Create Swift Project Structure
+        run: |
+          mkdir -p Imfaocoop.xcodeproj
+          cat << 'EOF' > ContentView.swift
+          import SwiftUI
+
+          struct ContentView: View {
+              var body: some View {
+                  ZStack {
+                      Color.black
+                          .ignoresSafeArea()
+
+                      Text("coop thought he was getting sum 😂")
+                          .font(.system(size: 30, weight: .bold))
+                          .foregroundColor(.white)
+                          .multilineTextAlignment(.center)
+                          .padding()
+                  }
+              }
+          }
+          EOF
+
+          cat << 'EOF' > main.swift
+          import SwiftUI
+
+          @main
+          struct ImfaocoopApp: App {
+              var body: some Scene {
+                  WindowGroup {
+                      ContentView()
+                  }
+              }
+          }
+          EOF
+
+      - name: Compile Binary
+        run: |
+          swiftc -parse-as-library main.swift ContentView.swift -target arm64-apple-ios16.0-simulator -sdk $(xcrun --sdk iphonesimulator --show-sdk-path) -o Imfaocoop
+
+      - name: Package App Bundle
+        run: |
+          mkdir -p Payload/Imfaocoop.app
+          mv Imfaocoop Payload/Imfaocoop.app/
+
+          cat << 'EOF' > Payload/Imfaocoop.app/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleIdentifier</key>
+              <string>com.r9k.lmfaocoop</string>
+              <key>CFBundleName</key>
+              <string>Imfaocoop</string>
+              <key>CFBundleExecutable</key>
+              <string>Imfaocoop</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>MinimumOSVersion</key>
+              <string>16.0</string>
+          </dict>
+          </plist>
+          EOF
+
+          zip -r Imfaocoop.ipa Payload
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Imfaocoop-IPA
+          path: Imfaocoop.ipa
