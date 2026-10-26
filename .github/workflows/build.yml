@@ -9,36 +9,11 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Swift Package
+      - name: Create Project Files
         run: |
-          swift package init --type executable --name Imfaocoop
+          mkdir -p Imfaocoop.xcodeproj
           
-          # Replace Package.swift for SwiftUI support
-          cat << 'EOF' > Package.swift
-          // swift-tools-version: 5.9
-          let package = Package(
-              name: "Imfaocoop",
-              platforms: [.iOS(.16)],
-              products: [.executable(name: "Imfaocoop", targets: ["Imfaocoop"])],
-              targets: [.executableTarget(name: "Imfaocoop", path: "Sources")]
-          )
-          EOF
-
-          mkdir -p Sources
-          cat << 'EOF' > Sources/main.swift
-          import SwiftUI
-
-          @main
-          struct ImfaocoopApp: App {
-              var body: some Scene {
-                  WindowGroup {
-                      ContentView()
-                  }
-              }
-          }
-          EOF
-
-          cat << 'EOF' > Sources/ContentView.swift
+          cat << 'EOF' > ContentView.swift
           import SwiftUI
 
           struct ContentView: View {
@@ -57,16 +32,20 @@ jobs:
           }
           EOF
 
-      - name: Build for iOS Device
-        run: |
-          swift build -c release --target Imfaocoop --sdk $(xcrun --sdk iphoneos --show-sdk-path) -Xswiftc -target -Xswiftc arm64-apple-ios16.0
+          cat << 'EOF' > MainApp.swift
+          import SwiftUI
 
-      - name: Package App Bundle & IPA
-        run: |
-          mkdir -p Payload/Imfaocoop.app
-          cp .build/release/Imfaocoop Payload/Imfaocoop.app/
-          
-          cat << 'EOF' > Payload/Imfaocoop.app/Info.plist
+          @main
+          struct ImfaocoopApp: App {
+              var body: some Scene {
+                  WindowGroup {
+                      ContentView()
+                  }
+              }
+          }
+          EOF
+
+          cat << 'EOF' > Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -87,6 +66,19 @@ jobs:
           </plist>
           EOF
 
+      - name: Compile with swiftc
+        run: |
+          swiftc -parse-as-library MainApp.swift ContentView.swift \
+            -target arm64-apple-ios16.0 \
+            -sdk $(xcrun --sdk iphoneos --show-sdk-path) \
+            -framework SwiftUI -framework UIKit -framework Foundation \
+            -o Imfaocoop
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload/Imfaocoop.app
+          mv Imfaocoop Payload/Imfaocoop.app/
+          cp Info.plist Payload/Imfaocoop.app/
           zip -r Imfaocoop.ipa Payload
 
       - name: Upload Artifact
